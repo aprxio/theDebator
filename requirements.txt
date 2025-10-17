@@ -1,0 +1,6 @@
+PyPDF2
+pydantic<2
+chromadb<0.4
+click
+ollama
+PyYAML

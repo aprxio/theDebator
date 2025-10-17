@@ -1,0 +1,14 @@
+backend: ollama
+rounds: 3
+models:
+  explainer: llama3.1:8b
+  reviewer: qwen2.5:14b-instruct
+retrieval:
+  chunk_size: 800
+  chunk_overlap: 200
+  persist_directory: chroma_store
+  top_k: 3
+paper:
+  path: data.pdf
+output:
+  path: discussion.md
