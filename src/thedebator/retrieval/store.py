@@ -7,6 +7,12 @@ from typing import Iterable, List, Optional
 import chromadb
 from chromadb.config import Settings
 
+# Disable ChromaDB anonymized telemetry for local CLI runs so the project
+# doesn't attempt to send telemetry (which can require network access and an
+# API key). We do this at runtime before any client is created.
+# Note: we will explicitly set anonymized_telemetry=False on the Settings
+# used to construct the client so telemetry won't be sent for this client.
+
 from .types import DocumentChunk
 
 
@@ -21,12 +27,15 @@ class VectorStore:
     def __post_init__(self) -> None:
         self.persist_directory = Path(self.persist_directory)
         self.persist_directory.mkdir(parents=True, exist_ok=True)
-        self._client = chromadb.Client(
-            Settings(
-                chroma_db_impl="duckdb+parquet",
-                persist_directory=str(self.persist_directory),
-            )
+        # Create a Settings instance with telemetry disabled so the ChromaDB
+        # System created by chromadb.Client will not attempt to send events.
+        settings = Settings(
+            chroma_db_impl="duckdb+parquet",
+            persist_directory=str(self.persist_directory),
+            anonymized_telemetry=False,
         )
+
+        self._client = chromadb.Client(settings)
 
     def reset(self) -> None:
         """Drop the existing collection if present."""
