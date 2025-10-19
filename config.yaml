@@ -1,14 +1,28 @@
 backend: ollama
 rounds: 3
+
+# Model configuration optimized for M2 MacBook Pro with 32GB RAM
+# Use quantized models for best performance/quality tradeoff
 models:
-  explainer: llama3.1:8b
-  reviewer: qwen2.5:14b-instruct
+  explainer: llama3.1:8b # Fast, efficient for explanations
+  reviewer: qwen2.5:14b-instruct # Stronger reasoning for critiques
+  # Quantized alternatives for better performance:
+  # explainer: llama3.1:8b-q4_K_M    # 4-bit quantized, ~5GB VRAM
+  # reviewer: qwen2.5:14b-q4_K_M     # 4-bit quantized, ~9GB VRAM
+
 retrieval:
-  chunk_size: 800
-  chunk_overlap: 200
+  chunk_size: 1000 # Larger chunks = better context
+  chunk_overlap: 250 # 25% overlap prevents context loss
   persist_directory: chroma_store
-  top_k: 3
+  top_k: 5 # More evidence per query
+  max_history_tokens: 2000 # Token budget for conversation history
+
+performance:
+  batch_size: 150 # Chunks per batch during ingestion
+  enable_streaming: true # Real-time token output
+
 paper:
   path: data.pdf
+
 output:
   path: discussion.md

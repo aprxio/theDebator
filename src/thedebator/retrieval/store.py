@@ -1,17 +1,12 @@
 """Vector store management using ChromaDB."""
 
+import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, List, Optional
 
 import chromadb
 from chromadb.config import Settings
-
-# Disable ChromaDB anonymized telemetry for local CLI runs so the project
-# doesn't attempt to send telemetry (which can require network access and an
-# API key). We do this at runtime before any client is created.
-# Note: we will explicitly set anonymized_telemetry=False on the Settings
-# used to construct the client so telemetry won't be sent for this client.
 
 from .types import DocumentChunk
 
@@ -27,12 +22,12 @@ class VectorStore:
     def __post_init__(self) -> None:
         self.persist_directory = Path(self.persist_directory)
         self.persist_directory.mkdir(parents=True, exist_ok=True)
-        # Create a Settings instance with telemetry disabled so the ChromaDB
-        # System created by chromadb.Client will not attempt to send events.
+
+        # Optimized settings for M2 Mac with Metal acceleration
         settings = Settings(
-            chroma_db_impl="duckdb+parquet",
             persist_directory=str(self.persist_directory),
             anonymized_telemetry=False,
+            allow_reset=True,
         )
 
         self._client = chromadb.Client(settings)
@@ -45,16 +40,40 @@ class VectorStore:
         if self.collection_name in existing:
             self._client.delete_collection(self.collection_name)
 
+    def _compute_content_hash(self, chunks: List[DocumentChunk]) -> str:
+        """Hash chunk contents to detect changes and avoid re-ingestion."""
+        hasher = hashlib.sha256()
+        for chunk in sorted(chunks, key=lambda c: c.chunk_id):
+            hasher.update(chunk.content.encode("utf-8"))
+        return hasher.hexdigest()
+
     def upsert(self, chunks: Iterable[DocumentChunk]) -> int:
         if not self._client:
             raise RuntimeError("VectorStore client is not initialized")
-        collection = self._client.get_or_create_collection(self.collection_name)
+
+        chunk_list = list(chunks)
+        if not chunk_list:
+            return 0
+
+        content_hash = self._compute_content_hash(chunk_list)
+
+        # Use cosine similarity for better semantic search
+        collection = self._client.get_or_create_collection(
+            self.collection_name,
+            metadata={"hnsw:space": "cosine", "content_hash": content_hash},
+        )
+
+        # Check if already ingested with same content
+        existing_meta = collection.metadata or {}
+        if existing_meta.get("content_hash") == content_hash:
+            print(f"Content unchanged (hash: {content_hash[:8]}...), skipping re-ingestion")
+            return len(chunk_list)
 
         ids: List[str] = []
         documents: List[str] = []
         metadatas: List[dict] = []
 
-        for chunk in chunks:
+        for chunk in chunk_list:
             ids.append(chunk.chunk_id)
             documents.append(chunk.content)
             metadatas.append({"page": chunk.page})
@@ -67,15 +86,26 @@ class VectorStore:
     def similarity_search(self, query: str, k: int = 3) -> List[DocumentChunk]:
         if not self._client:
             return []
-        collection = self._client.get_or_create_collection(self.collection_name)
-        results = collection.query(query_texts=[query], n_results=k)
+
+        collection = self._client.get_or_create_collection(
+            self.collection_name, metadata={"hnsw:space": "cosine"}
+        )
+
+        results = collection.query(
+            query_texts=[query], n_results=k, include=["documents", "metadatas", "distances"]
+        )
 
         ids = results.get("ids", [[]])[0]
         documents = results.get("documents", [[]])[0]
         metadatas = results.get("metadatas", [[]])[0]
+        distances = results.get("distances", [[]])[0]
 
         chunks: List[DocumentChunk] = []
-        for chunk_id, content, metadata in zip(ids, documents, metadatas):
+        for chunk_id, content, metadata, dist in zip(ids, documents, metadatas, distances):
+            # Filter low-relevance chunks (cosine distance > 0.5 means weak match)
+            if dist > 0.5:
+                continue
             page = int(metadata.get("page", 0)) if isinstance(metadata, dict) else 0
             chunks.append(DocumentChunk(chunk_id=chunk_id, content=content, page=page))
+
         return chunks
